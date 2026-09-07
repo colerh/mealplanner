@@ -1,0 +1,12 @@
+{
+  "name": "mealplanner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Personal recipe library, meal calendar, pantry tracker, and shopping list PWA with optional Kroger cart integration.",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "npx serve . -l 5000"
+  }
+}

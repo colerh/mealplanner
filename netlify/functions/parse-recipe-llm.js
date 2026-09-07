@@ -22,63 +22,45 @@ Rules:
 - Output nothing but the JSON object.`;
 
 function extractJson(text) {
-  try {
-    return JSON.parse(text);
-  } catch {
+  try { return JSON.parse(text); }
+  catch {
     const match = text.match(/\{[\s\S]*\}/);
     if (match) return JSON.parse(match[0]);
     throw new Error('Model did not return valid JSON.');
   }
 }
 
-module.exports = async (req, res) => {
-  if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Method not allowed' });
-    return;
-  }
+exports.handler = async (event) => {
+  if (event.httpMethod !== 'POST') return { statusCode: 405, body: JSON.stringify({ error: 'Method not allowed' }) };
+
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    res.status(500).json({ error: 'Server is missing ANTHROPIC_API_KEY.' });
-    return;
-  }
-  const { text, sourceUrl } = req.body || {};
-  if (!text || typeof text !== 'string') {
-    res.status(400).json({ error: 'Missing "text".' });
-    return;
-  }
+  if (!apiKey) return { statusCode: 500, body: JSON.stringify({ error: 'Server is missing ANTHROPIC_API_KEY.' }) };
+
+  let text, sourceUrl;
+  try { ({ text, sourceUrl } = JSON.parse(event.body || '{}')); } catch { return { statusCode: 400, body: JSON.stringify({ error: 'Invalid JSON body.' }) }; }
+  if (!text || typeof text !== 'string') return { statusCode: 400, body: JSON.stringify({ error: 'Missing "text".' }) };
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
         model: MODEL,
         max_tokens: 2048,
         system: SYSTEM_PROMPT,
-        messages: [{
-          role: 'user',
-          content: `Source URL: ${sourceUrl || 'unknown'}\n\nPage text:\n${text.slice(0, 12000)}`,
-        }],
+        messages: [{ role: 'user', content: `Source URL: ${sourceUrl || 'unknown'}\n\nPage text:\n${text.slice(0, 12000)}` }],
       }),
     });
-
     if (!response.ok) {
       const errBody = await response.text();
       console.error('Anthropic API error', response.status, errBody);
-      res.status(502).json({ error: `LLM request failed (${response.status})` });
-      return;
+      return { statusCode: 502, body: JSON.stringify({ error: `LLM request failed (${response.status})` }) };
     }
-
     const data = await response.json();
-    const content = data.content?.[0]?.text || '';
-    const recipe = extractJson(content);
-    res.status(200).json(recipe);
+    const recipe = extractJson(data.content?.[0]?.text || '');
+    return { statusCode: 200, body: JSON.stringify(recipe) };
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to parse recipe with LLM.' });
+    return { statusCode: 500, body: JSON.stringify({ error: 'Failed to parse recipe with LLM.' }) };
   }
 };

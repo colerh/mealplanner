@@ -1,5 +1,5 @@
-// Guards against server-side request forgery in api/fetch-page.js: only
-// plain http/https URLs pointing at public hostnames/IPs are allowed.
+// Guards against server-side request forgery in fetch-page.js: only plain
+// http/https URLs pointing at public hostnames/IPs are allowed.
 const dns = require('dns').promises;
 const net = require('net');
 
@@ -18,36 +18,24 @@ function isPrivateIp(ip) {
   if (version === 6) {
     const lower = ip.toLowerCase();
     if (lower === '::1') return true;
-    if (lower.startsWith('fc') || lower.startsWith('fd')) return true; // unique local
-    if (lower.startsWith('fe80')) return true; // link-local
+    if (lower.startsWith('fc') || lower.startsWith('fd')) return true;
+    if (lower.startsWith('fe80')) return true;
     return false;
   }
-  return true; // unresolvable / unknown -> treat as unsafe
+  return true;
 }
 
 async function assertPublicHttpUrl(rawUrl) {
   let parsed;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    throw new Error('Invalid URL.');
-  }
-  if (!['http:', 'https:'].includes(parsed.protocol)) {
-    throw new Error('Only http/https URLs are allowed.');
-  }
+  try { parsed = new URL(rawUrl); } catch { throw new Error('Invalid URL.'); }
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Only http/https URLs are allowed.');
   const hostname = parsed.hostname.toLowerCase();
   if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '0.0.0.0') {
     throw new Error('Refusing to fetch a local/internal address.');
   }
   let addresses;
-  try {
-    addresses = await dns.lookup(hostname, { all: true });
-  } catch {
-    throw new Error('Could not resolve host.');
-  }
-  if (addresses.some((a) => isPrivateIp(a.address))) {
-    throw new Error('Refusing to fetch a private/internal address.');
-  }
+  try { addresses = await dns.lookup(hostname, { all: true }); } catch { throw new Error('Could not resolve host.'); }
+  if (addresses.some(a => isPrivateIp(a.address))) throw new Error('Refusing to fetch a private/internal address.');
   return parsed;
 }
 

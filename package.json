@@ -1,12 +1,19 @@
 {
   "name": "mealplanner",
   "version": "1.0.0",
-  "private": true,
-  "description": "Personal recipe library, meal calendar, pantry tracker, and shopping list PWA with optional Kroger cart integration.",
+  "description": "Personal recipe, meal planning, and pantry tracker — deploys to Netlify",
+  "scripts": {
+    "dev": "netlify dev",
+    "local": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "netlify-cli": "^17.0.0"
+  },
   "engines": {
     "node": ">=18"
-  },
-  "scripts": {
-    "dev": "npx serve . -l 5000"
   }
 }

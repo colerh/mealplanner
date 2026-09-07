@@ -1,0 +1,2 @@
+# Redirect rules are managed entirely in netlify.toml.
+# Keeping this file empty avoids precedence ambiguity.

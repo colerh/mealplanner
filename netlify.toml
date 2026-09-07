@@ -1,0 +1,19 @@
+[build]
+  functions = "netlify/functions"
+  publish   = "."
+
+[functions]
+  node_bundler = "esbuild"
+
+# API calls: /api/foo -> /.netlify/functions/foo
+# Must be listed BEFORE the SPA fallback so it wins.
+[[redirects]]
+  from   = "/api/:splat"
+  to     = "/.netlify/functions/:splat"
+  status = 200
+
+# SPA fallback — serve index.html for all other routes.
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200

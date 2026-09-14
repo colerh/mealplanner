@@ -639,7 +639,7 @@ function pickRecipeModal(onPick) {
   openModal(`
     <h3>Choose a recipe</h3>
     <input type="search" id="pick-search" placeholder="Search recipes..." style="margin-bottom:10px">
-    <div id="pick-list" style="max-height:50vh;overflow-y:auto"></div>
+    <div id="pick-list"></div>
     ${recipes.length ? '' : '<p class="text-dim text-small">No recipes saved yet. Add some in the Recipes tab first.</p>'}
   `, {
     onMount(modal, close) {
@@ -1185,7 +1185,7 @@ async function openKrogerReview() {
   openModal(`
     <h3>Confirm Kroger Matches</h3>
     <p class="text-dim text-small" style="margin-bottom:10px">Items get added to whatever store is currently active on your Kroger account — if something doesn't show up in your cart, check that it matches the store selected in Settings (<strong>${escapeHtml(settings.krogerLocationLabel || settings.krogerLocationId)}</strong>).</p>
-    <div style="max-height:60vh;overflow-y:auto">${bodyHtml}</div>
+    ${bodyHtml}
     <div class="btn-row mt-8"><button class="btn btn-outline flex-1" data-a="cancel">Cancel</button><button class="btn btn-primary flex-1" data-a="confirm">Add to Cart</button></div>
   `, {
     onMount(modal, close) {

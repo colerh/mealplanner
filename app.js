@@ -307,8 +307,8 @@ function renderRecipeImport(tab) {
     btn.disabled = true;
     statusEl.innerHTML = `<span class="spinner"></span> Fetching page...`;
     try {
-      const recipe = await importRecipeFromUrl(url);
-      toast('Parsed structured recipe data.', 'success');
+      const { recipe, viaWayback } = await importRecipeFromUrl(url);
+      toast(viaWayback ? 'Site blocked a live fetch — parsed from an archived copy instead.' : 'Parsed structured recipe data.', 'success');
       goToRecipeForm(null, recipe);
     } catch (err) {
       console.error(err);
@@ -458,7 +458,7 @@ function renderRecipeDetail(tab, id) {
 async function fetchPageHtml(url) {
   const res = await fetch('/api/fetch-page', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
   if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || `Failed to fetch page (${res.status})`); }
-  return (await res.json()).html;
+  return res.json(); // { html, viaWayback }
 }
 
 function collectJsonLdNodes(doc) {
@@ -528,12 +528,12 @@ function extractJsonLdRecipe(html, sourceUrl) {
   };
 }
 async function importRecipeFromUrl(url) {
-  const html = await fetchPageHtml(url);
+  const { html, viaWayback } = await fetchPageHtml(url);
   const recipe = extractJsonLdRecipe(html, url);
   if (!recipe || !recipe.ingredients.length) {
     throw new Error("No structured recipe data found on this page. Try a different site, or add the recipe manually.");
   }
-  return recipe;
+  return { recipe, viaWayback };
 }
 
 // ── PANTRY ──────────────────────────────────────────────────────────────────

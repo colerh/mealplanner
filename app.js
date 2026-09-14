@@ -285,11 +285,18 @@ function renderRecipeImport(tab) {
       <div class="field"><label>Recipe URL</label><input type="url" id="import-url" placeholder="https://example.com/recipe"></div>
       <div class="btn-row">
         <button class="btn btn-ghost" id="cancel-import-btn">Cancel</button>
-        <button class="btn btn-primary flex-1" id="import-btn">Import</button>
+        <button class="btn btn-primary flex-1" id="import-btn">Fetch &amp; Import</button>
       </div>
       <div id="import-status" class="text-dim text-small mt-8"></div>
     </div>
-    <p class="text-dim text-small">Works on sites that publish embedded recipe data (JSON-LD) — most major recipe sites do (AllRecipes, Food Network, Serious Eats, etc). If a site doesn't have it, add the recipe manually instead.</p>
+    <div class="card">
+      <h2>Site blocking the fetch?</h2>
+      <p class="text-dim text-small">Some sites (AllRecipes and other big publishers) run bot-detection that blocks automated fetches entirely — no way around that from a server. Workaround: open the recipe in your own browser (it'll load fine there), copy the page's HTML source, and paste it below — same parser, just skips the blocked fetch.</p>
+      <p class="text-dim text-small"><strong>Desktop:</strong> right-click the page → View Page Source (or Ctrl/Cmd+U) → Ctrl/Cmd+A → Ctrl/Cmd+C.</p>
+      <div class="field mt-8"><textarea id="import-html" rows="6" placeholder="Paste page HTML here..."></textarea></div>
+      <button class="btn btn-outline btn-block" id="parse-html-btn">Parse Pasted HTML</button>
+    </div>
+    <p class="text-dim text-small">Either path only works on sites that publish embedded recipe data (JSON-LD) — most major recipe sites do. If neither works, add the recipe manually instead.</p>
   `;
   tab.querySelector('#cancel-import-btn').addEventListener('click', goToRecipeList);
   tab.querySelector('#import-btn').addEventListener('click', async () => {
@@ -306,9 +313,18 @@ function renderRecipeImport(tab) {
     } catch (err) {
       console.error(err);
       statusEl.textContent = '';
-      toast(err.message || 'Import failed.', 'error');
+      toast(err.message || 'Import failed. Try the paste-HTML option below.', 'error');
       btn.disabled = false;
     }
+  });
+  tab.querySelector('#parse-html-btn').addEventListener('click', () => {
+    const html = tab.querySelector('#import-html').value;
+    const url = tab.querySelector('#import-url').value.trim();
+    if (!html.trim()) { toast('Paste some HTML first.', 'error'); return; }
+    const recipe = extractJsonLdRecipe(html, url);
+    if (!recipe || !recipe.ingredients.length) { toast('No structured recipe data found in that HTML.', 'error'); return; }
+    toast('Parsed structured recipe data.', 'success');
+    goToRecipeForm(null, recipe);
   });
 }
 

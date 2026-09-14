@@ -578,12 +578,20 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
-// ── PLAN (weekly calendar) ──────────────────────────────────────────────────
+// ── PLAN (weekly calendar + month overview) ─────────────────────────────────
+let planViewMode = 'week';
 let planAnchor = getTodayStr();
+let monthAnchor = getTodayStr();
 
 function weekDates(anchorISO, weekStartsOn) {
   const start = startOfWeek(new Date(anchorISO + 'T00:00:00'), weekStartsOn);
   return Array.from({ length: 7 }, (_, i) => addDays(start, i));
+}
+function monthGridDates(anchorISO, weekStartsOn) {
+  const anchor = new Date(anchorISO + 'T00:00:00');
+  const firstOfMonth = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+  const start = startOfWeek(firstOfMonth, weekStartsOn);
+  return Array.from({ length: 42 }, (_, i) => addDays(start, i));
 }
 
 function pickRecipeModal(onPick) {
@@ -607,8 +615,49 @@ function pickRecipeModal(onPick) {
   });
 }
 
-function renderPlanTab() {
-  const content = document.getElementById('plan-content');
+// Shared day-editor used by both the month view (tap a day) and could be
+// reused anywhere else a single day's slots need editing.
+function openDayMealsModal(dateISO) {
+  const dateLabel = new Date(dateISO + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  openModal(`
+    <h3>${escapeHtml(dateLabel)}</h3>
+    <div id="day-meals-list"></div>
+    <button class="btn btn-outline btn-block mt-8" data-a="close">Close</button>
+  `, {
+    onMount(modal, close) {
+      const listEl = modal.querySelector('#day-meals-list');
+      function draw() {
+        const settings = getSettings();
+        const mealPlan = getMealPlan();
+        const recipesById = Object.fromEntries(getRecipes().map(r => [r.id, r]));
+        listEl.innerHTML = settings.mealSlots.map(slot => {
+          const entry = mealPlan.find(e => e.date === dateISO && e.mealSlot === slot);
+          const recipe = entry ? recipesById[entry.recipeId] : null;
+          return `
+            <div class="slot-row ${recipe ? 'filled' : ''}" data-slot="${slot}">
+              <div class="slot-label">${escapeHtml(slot)}</div>
+              <div class="slot-content">${recipe ? escapeHtml(recipe.title) : '<span class="text-dim">tap to assign</span>'}</div>
+              ${recipe ? '<button class="remove-row-btn" data-clear-slot>&times;</button>' : ''}
+            </div>`;
+        }).join('');
+        listEl.querySelectorAll('.slot-row').forEach(row => {
+          row.querySelector('.slot-content').addEventListener('click', () => {
+            pickRecipeModal(recipeId => { setMealPlanEntry(dateISO, row.dataset.slot, recipeId); draw(); renderPlanTab(); });
+          });
+          row.querySelector('[data-clear-slot]')?.addEventListener('click', e => {
+            e.stopPropagation();
+            setMealPlanEntry(dateISO, row.dataset.slot, null);
+            draw(); renderPlanTab();
+          });
+        });
+      }
+      draw();
+      modal.querySelector('[data-a=close]').addEventListener('click', close);
+    },
+  });
+}
+
+function drawWeekView(content) {
   const settings = getSettings();
 
   function draw() {
@@ -671,6 +720,77 @@ function renderPlanTab() {
   }
 
   draw();
+}
+
+function drawMonthView(content) {
+  const settings = getSettings();
+  const anchorDate = new Date(monthAnchor + 'T00:00:00');
+  const currentMonth = anchorDate.getMonth();
+  const monthLabel = anchorDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  const dates = monthGridDates(monthAnchor, settings.weekStartsOn);
+  const mealPlan = getMealPlan();
+  const recipesById = Object.fromEntries(getRecipes().map(r => [r.id, r]));
+  const todayISO = getTodayStr();
+  const CHIP_LIMIT = 2;
+
+  content.innerHTML = `
+    <div class="week-nav">
+      <button class="btn btn-outline btn-sm" id="prev-month">&larr;</button>
+      <span class="week-label">${escapeHtml(monthLabel)}</span>
+      <button class="btn btn-outline btn-sm" id="next-month">&rarr;</button>
+    </div>
+    <div class="month-grid">
+      ${dates.slice(0, 7).map(d => `<div class="month-dow">${fmtDayLabel(d)}</div>`).join('')}
+      ${dates.map(date => {
+        const dateISO = toISODate(date);
+        const inMonth = date.getMonth() === currentMonth;
+        const isToday = dateISO === todayISO;
+        const entries = settings.mealSlots
+          .map(slot => mealPlan.find(e => e.date === dateISO && e.mealSlot === slot))
+          .filter(Boolean)
+          .map(e => recipesById[e.recipeId])
+          .filter(Boolean);
+        const shown = entries.slice(0, CHIP_LIMIT);
+        const extra = entries.length - shown.length;
+        return `
+          <div class="month-cell ${inMonth ? '' : 'dim'} ${isToday ? 'today' : ''}" data-date="${dateISO}">
+            <div class="month-cell-daynum">${date.getDate()}</div>
+            <div class="month-cell-chips">
+              ${shown.map(r => `<div class="month-chip">${escapeHtml(r.title)}</div>`).join('')}
+              ${extra > 0 ? `<div class="month-chip-more">+${extra} more</div>` : ''}
+            </div>
+          </div>`;
+      }).join('')}
+    </div>
+  `;
+
+  content.querySelectorAll('.month-cell').forEach(cell => cell.addEventListener('click', () => openDayMealsModal(cell.dataset.date)));
+  content.querySelector('#prev-month').addEventListener('click', () => {
+    monthAnchor = toISODate(new Date(anchorDate.getFullYear(), anchorDate.getMonth() - 1, 1));
+    drawMonthView(content);
+  });
+  content.querySelector('#next-month').addEventListener('click', () => {
+    monthAnchor = toISODate(new Date(anchorDate.getFullYear(), anchorDate.getMonth() + 1, 1));
+    drawMonthView(content);
+  });
+}
+
+function renderPlanTab() {
+  const content = document.getElementById('plan-content');
+  content.innerHTML = `
+    <div class="toggle-group">
+      <button class="toggle-btn ${planViewMode === 'week' ? 'active' : ''}" data-view="week">Week</button>
+      <button class="toggle-btn ${planViewMode === 'month' ? 'active' : ''}" data-view="month">Month</button>
+    </div>
+    <div id="plan-view"></div>
+  `;
+  content.querySelectorAll('.toggle-btn').forEach(btn => btn.addEventListener('click', () => {
+    planViewMode = btn.dataset.view;
+    renderPlanTab();
+  }));
+  const viewEl = content.querySelector('#plan-view');
+  if (planViewMode === 'month') drawMonthView(viewEl);
+  else drawWeekView(viewEl);
 }
 
 // ── SHOPPING ────────────────────────────────────────────────────────────────

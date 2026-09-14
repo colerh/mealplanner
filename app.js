@@ -143,6 +143,30 @@ function formatQuantity(amount, unit) {
   return parts.join(' ');
 }
 
+// Strips prep/descriptor noise ("egg, lightly beaten" -> "egg") before
+// hitting Kroger's product search — recipe ingredient text is written for
+// humans, not a product catalog search box, and prep words hurt match quality.
+const INGREDIENT_SEARCH_STOPWORDS = [
+  'lightly beaten', 'well beaten', 'beaten', 'finely chopped', 'coarsely chopped',
+  'roughly chopped', 'chopped', 'finely diced', 'diced', 'minced', 'thinly sliced',
+  'sliced thin', 'sliced', 'grated', 'shredded', 'melted', 'softened',
+  'at room temperature', 'room temperature', 'peeled and deveined', 'peeled',
+  'deveined', 'seeded', 'cored', 'crushed', 'drained and rinsed', 'drained',
+  'rinsed', 'packed', 'divided', 'to taste', 'for garnish', 'if desired',
+  'optional', 'finely', 'coarsely', 'roughly', 'freshly', 'thinly', 'julienned',
+  'cubed', 'halved', 'quartered', 'trimmed', 'washed', 'cleaned', 'boneless',
+  'skinless', 'unsalted', 'salted',
+].sort((a, b) => b.length - a.length);
+
+function cleanIngredientSearchTerm(name) {
+  let s = String(name || '').toLowerCase();
+  s = s.replace(/\([^)]*\)/g, ' '); // drop parenthetical asides
+  s = s.split(',')[0]; // "egg, lightly beaten" -> "egg" — prep notes almost always follow a comma
+  INGREDIENT_SEARCH_STOPWORDS.forEach(w => { s = s.replace(new RegExp(`\\b${w}\\b`, 'g'), ' '); });
+  s = s.replace(/\s+/g, ' ').trim();
+  return s || String(name || '').trim();
+}
+
 // ── UI helpers ────────────────────────────────────────────────────────────────
 function escapeHtml(str) {
   return String(str ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -867,6 +891,7 @@ function generateShoppingListFromDates(dates) {
 function renderShoppingTab() {
   const content = document.getElementById('shopping-content');
   const connected = isKrogerConnected();
+  const settings = getSettings();
   content.innerHTML = `
     <div class="card">
       <div class="field-row" style="align-items:flex-end">
@@ -874,39 +899,63 @@ function renderShoppingTab() {
         <button class="btn btn-primary" id="manual-add-btn" style="margin-bottom:12px">Add</button>
       </div>
     </div>
-    <div class="btn-row" style="margin-bottom:12px">
+    <div class="btn-row" style="margin-bottom:8px">
       <button class="btn btn-outline btn-sm" id="clear-checked-btn">Clear Checked</button>
-      <button class="btn btn-primary btn-sm flex-1" id="send-kroger-btn">Send to Kroger Cart</button>
+      <button class="btn btn-outline btn-sm flex-1" id="estimate-cost-btn">Estimate Cost</button>
     </div>
+    <div id="estimate-summary"></div>
+    <button class="btn btn-primary btn-block" id="send-kroger-btn" style="margin-bottom:12px">Send to Kroger Cart</button>
     <div class="kroger-status ${connected ? 'connected' : 'disconnected'}">${connected ? '● Kroger account connected' : '○ Kroger not connected — set up in Settings.'}</div>
     <div id="shopping-list"></div>
   `;
   const listEl = content.querySelector('#shopping-list');
+  const summaryEl = content.querySelector('#estimate-summary');
+
+  function drawSummary(uncheckedForSummary) {
+    if (!connected || !settings.krogerLocationId || !uncheckedForSummary.length) { summaryEl.innerHTML = ''; return; }
+    const summary = computeEstimateSummary(uncheckedForSummary, settings.krogerLocationId);
+    if (!summary) { summaryEl.innerHTML = ''; return; }
+    summaryEl.innerHTML = `
+      <div class="card" style="margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline">
+          <span class="text-dim text-small">Estimated total (${summary.pricedCount}/${summary.totalCount} priced)</span>
+          <span style="font-size:20px;font-weight:700;color:var(--accent)">$${summary.total.toFixed(2)}</span>
+        </div>
+        <div class="text-dim text-small mt-8">Based on the top match per item — actual picks/prices confirmed when you send to cart.</div>
+      </div>`;
+  }
 
   function draw() {
     const current = getShopping();
     if (!current.length) {
       listEl.innerHTML = `<div class="empty-state"><div class="big">🛒</div>List is empty.<br>Generate one from your weekly plan or add items manually.</div>`;
+      summaryEl.innerHTML = '';
       return;
     }
     const unchecked = current.filter(i => !i.checked);
     const checked = current.filter(i => i.checked);
-    const row = item => `
+    const estimate = (connected && settings.krogerLocationId) ? computeEstimateSummary(unchecked, settings.krogerLocationId) : null;
+    const row = item => {
+      const price = estimate?.priceByName.get(normalizeIngredientName(item.ingredientName));
+      return `
       <div class="shop-row ${item.checked ? 'checked' : ''}" data-idx="${current.indexOf(item)}">
         <div class="checkbox" data-toggle>${item.checked ? svgI('check', 13, '#0f1117') : ''}</div>
         <div class="item-qty">${escapeHtml(item.quantity || '')}</div>
         <div class="item-name">${escapeHtml(item.ingredientName)} ${item.pantryFlag === 'low' ? '<span class="badge badge-amber">low</span>' : ''}</div>
+        ${price !== undefined ? `<span class="badge badge-green">$${price.toFixed(2)}</span>` : ''}
         <button class="remove-row-btn" data-remove>&times;</button>
       </div>`;
+    };
     listEl.innerHTML = `
       ${unchecked.length ? `<div class="shop-group-title">To Get (${unchecked.length})</div><div class="card">${unchecked.map(row).join('')}</div>` : ''}
       ${checked.length ? `<div class="shop-group-title">Checked (${checked.length})</div><div class="card">${checked.map(row).join('')}</div>` : ''}
     `;
     listEl.querySelectorAll('.shop-row').forEach(rowEl => {
       const idx = Number(rowEl.dataset.idx);
-      rowEl.querySelector('[data-toggle]').addEventListener('click', () => { const all = getShopping(); all[idx].checked = !all[idx].checked; setShopping(all); draw(); });
-      rowEl.querySelector('[data-remove]').addEventListener('click', () => { const all = getShopping(); all.splice(idx, 1); setShopping(all); draw(); });
+      rowEl.querySelector('[data-toggle]').addEventListener('click', () => { const all = getShopping(); all[idx].checked = !all[idx].checked; setShopping(all); draw(); drawSummary(getShopping().filter(i => !i.checked)); });
+      rowEl.querySelector('[data-remove]').addEventListener('click', () => { const all = getShopping(); all.splice(idx, 1); setShopping(all); draw(); drawSummary(getShopping().filter(i => !i.checked)); });
     });
+    drawSummary(unchecked);
   }
 
   content.querySelector('#manual-add-btn').addEventListener('click', () => {
@@ -920,6 +969,7 @@ function renderShoppingTab() {
   content.querySelector('#clear-checked-btn').addEventListener('click', async () => {
     if (await confirmDialog('Remove all checked items?')) { setShopping(getShopping().filter(i => !i.checked)); draw(); }
   });
+  content.querySelector('#estimate-cost-btn').addEventListener('click', estimateShoppingCost);
   content.querySelector('#send-kroger-btn').addEventListener('click', openKrogerReview);
   draw();
 }
@@ -1031,15 +1081,76 @@ async function searchKrogerProducts(term, locationId) {
 }
 async function addItemsToKrogerCart(items) {
   const token = await getKrogerUserAccessToken();
-  await krogerProxy(token, 'PUT', '/v1/cart/add', undefined, { items: items.map(i => ({ upc: i.upc, quantity: i.quantity || 1, modality: 'PICKUP' })) });
+  // Kroger's cart/add returns 200/204 even when it silently drops an item
+  // that isn't valid at your account's currently-active store (that store is
+  // separate from whatever location we searched products under — Kroger's
+  // API has no endpoint for us to set it). Log the raw response so it's at
+  // least inspectable if something goes missing.
+  const data = await krogerProxy(token, 'PUT', '/v1/cart/add', undefined, { items: items.map(i => ({ upc: i.upc, quantity: i.quantity || 1, modality: 'PICKUP' })) });
+  console.log('Kroger cart/add response:', data);
   return true;
 }
 
-function productPrice(product) {
+function productPriceValue(product) {
   const price = product.items?.[0]?.price;
-  if (!price) return '';
+  if (!price) return null;
   const amount = price.promo || price.regular;
-  return amount ? `$${Number(amount).toFixed(2)}` : '';
+  return amount ? Number(amount) : null;
+}
+function productPrice(product) {
+  const amount = productPriceValue(product);
+  return amount === null ? '' : `$${amount.toFixed(2)}`;
+}
+
+// Shared by the cost-estimate button and the Send-to-Cart review — both need
+// the same "search Kroger for each unchecked item" step, so cache the result
+// keyed by exactly which items + which store it covers, and skip re-querying
+// Kroger a second time if nothing relevant changed in between.
+let lastKrogerMatchCache = null;
+
+function shoppingMatchKey(items, locationId) {
+  return locationId + '|' + items.map(i => normalizeIngredientName(i.ingredientName)).sort().join(',');
+}
+
+async function matchShoppingItemsToKrogerProducts(items, locationId, { useCache = true } = {}) {
+  const key = shoppingMatchKey(items, locationId);
+  if (useCache && lastKrogerMatchCache && lastKrogerMatchCache.key === key) return lastKrogerMatchCache.results;
+  const results = await Promise.all(items.map(async item => {
+    try { return { item, matches: await searchKrogerProducts(cleanIngredientSearchTerm(item.ingredientName), locationId), error: null }; }
+    catch (err) { return { item, matches: [], error: err.message }; }
+  }));
+  lastKrogerMatchCache = { key, results };
+  return results;
+}
+
+async function estimateShoppingCost() {
+  if (!isKrogerConnected()) { toast('Connect your Kroger account in Settings first.', 'error'); return; }
+  const settings = getSettings();
+  if (!settings.krogerLocationId) { toast('Pick a Kroger store in Settings first.', 'error'); return; }
+  const items = getShopping().filter(i => !i.checked);
+  if (!items.length) { toast('Nothing to estimate — everything is checked off.', 'error'); return; }
+
+  const btn = document.getElementById('estimate-cost-btn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Estimating...'; }
+  try {
+    await matchShoppingItemsToKrogerProducts(items, settings.krogerLocationId, { useCache: false });
+    renderShoppingTab();
+  } catch (err) {
+    toast(err.message || 'Price lookup failed.', 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Estimate Cost'; }
+  }
+}
+
+function computeEstimateSummary(items, locationId) {
+  const key = shoppingMatchKey(items, locationId);
+  if (!lastKrogerMatchCache || lastKrogerMatchCache.key !== key) return null;
+  let total = 0, pricedCount = 0;
+  const priceByName = new Map();
+  lastKrogerMatchCache.results.forEach(r => {
+    const price = r.matches[0] ? productPriceValue(r.matches[0]) : null;
+    if (price !== null) { total += price; pricedCount++; priceByName.set(normalizeIngredientName(r.item.ingredientName), price); }
+  });
+  return { total, pricedCount, totalCount: items.length, priceByName };
 }
 
 async function openKrogerReview() {
@@ -1052,10 +1163,7 @@ async function openKrogerReview() {
   const closeLoading = openModal(`<h3>Matching items...</h3><div style="text-align:center;padding:20px"><span class="spinner"></span></div>`);
   let results;
   try {
-    results = await Promise.all(items.map(async item => {
-      try { return { item, matches: await searchKrogerProducts(item.ingredientName, settings.krogerLocationId), error: null }; }
-      catch (err) { return { item, matches: [], error: err.message }; }
-    }));
+    results = await matchShoppingItemsToKrogerProducts(items, settings.krogerLocationId);
   } catch (err) { closeLoading(); toast(err.message || 'Product search failed.', 'error'); return; }
   closeLoading();
 
@@ -1076,6 +1184,7 @@ async function openKrogerReview() {
 
   openModal(`
     <h3>Confirm Kroger Matches</h3>
+    <p class="text-dim text-small" style="margin-bottom:10px">Items get added to whatever store is currently active on your Kroger account — if something doesn't show up in your cart, check that it matches the store selected in Settings (<strong>${escapeHtml(settings.krogerLocationLabel || settings.krogerLocationId)}</strong>).</p>
     <div style="max-height:60vh;overflow-y:auto">${bodyHtml}</div>
     <div class="btn-row mt-8"><button class="btn btn-outline flex-1" data-a="cancel">Cancel</button><button class="btn btn-primary flex-1" data-a="confirm">Add to Cart</button></div>
   `, {
@@ -1092,8 +1201,11 @@ async function openKrogerReview() {
       modal.querySelector('[data-a=confirm]').addEventListener('click', async () => {
         const toAdd = Array.from(selections.values()).filter(Boolean).map(upc => ({ upc, quantity: 1 }));
         if (!toAdd.length) { toast('No items selected.', 'error'); return; }
-        try { await addItemsToKrogerCart(toAdd); toast(`Added ${toAdd.length} item${toAdd.length === 1 ? '' : 's'} to your Kroger cart.`, 'success'); close(); }
-        catch (err) { toast(err.message || 'Failed to add to cart.', 'error'); }
+        try {
+          await addItemsToKrogerCart(toAdd);
+          toast(`Sent ${toAdd.length} item${toAdd.length === 1 ? '' : 's'} to Kroger — double check your cart, since Kroger fulfills to whichever store is active on your account.`, 'success');
+          close();
+        } catch (err) { toast(err.message || 'Failed to add to cart.', 'error'); }
       });
     },
   });
@@ -1123,6 +1235,7 @@ function renderSettingsTab() {
       </div>
       <div id="location-results"></div>
       <div id="current-location" class="text-small mt-8">${settings.krogerLocationLabel ? `Selected store: <strong>${escapeHtml(settings.krogerLocationLabel)}</strong>` : '<span class="text-dim">No store selected.</span>'}</div>
+      <p class="text-dim text-small mt-8">This store is only used to look up products/prices. Kroger actually adds cart items to whichever store is currently active on your Kroger account — make sure that matches, in the Kroger app or kroger.com, or items may not show up after "Send to Kroger Cart."</p>
     </div>
 
     <div class="card">

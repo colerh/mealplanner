@@ -1,7 +1,7 @@
 /*
  * Local dev server — mirrors the Netlify Functions API exactly.
  * Run:  node server.js  →  http://localhost:3000
- * Needs: .env with ANTHROPIC_API_KEY, KROGER_CLIENT_ID, KROGER_CLIENT_SECRET
+ * Needs: .env with KROGER_CLIENT_ID, KROGER_CLIENT_SECRET
  */
 require('dotenv').config();
 const express = require('express');
@@ -28,13 +28,11 @@ function wrap(fn) {
 }
 
 const fetchPage       = require('./netlify/functions/fetch-page');
-const parseRecipeLlm  = require('./netlify/functions/parse-recipe-llm');
 const krogerConfig    = require('./netlify/functions/kroger-config');
 const krogerToken     = require('./netlify/functions/kroger-token');
 const krogerProxy     = require('./netlify/functions/kroger-proxy');
 
 app.post('/api/fetch-page',       wrap(fetchPage.handler));
-app.post('/api/parse-recipe-llm', wrap(parseRecipeLlm.handler));
 app.get('/api/kroger-config',     wrap(krogerConfig.handler));
 app.post('/api/kroger-token',     wrap(krogerToken.handler));
 app.post('/api/kroger-proxy',     wrap(krogerProxy.handler));

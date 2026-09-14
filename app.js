@@ -289,7 +289,7 @@ function renderRecipeImport(tab) {
       </div>
       <div id="import-status" class="text-dim text-small mt-8"></div>
     </div>
-    <p class="text-dim text-small">Parses embedded recipe data (JSON-LD) when the site provides it, with an AI fallback otherwise. You'll review before saving.</p>
+    <p class="text-dim text-small">Works on sites that publish embedded recipe data (JSON-LD) — most major recipe sites do (AllRecipes, Food Network, Serious Eats, etc). If a site doesn't have it, add the recipe manually instead.</p>
   `;
   tab.querySelector('#cancel-import-btn').addEventListener('click', goToRecipeList);
   tab.querySelector('#import-btn').addEventListener('click', async () => {
@@ -300,8 +300,8 @@ function renderRecipeImport(tab) {
     btn.disabled = true;
     statusEl.innerHTML = `<span class="spinner"></span> Fetching page...`;
     try {
-      const { recipe, method } = await importRecipeFromUrl(url);
-      toast(`Parsed via ${method === 'json-ld' ? 'structured recipe data' : 'AI fallback'}.`, 'success');
+      const recipe = await importRecipeFromUrl(url);
+      toast('Parsed structured recipe data.', 'success');
       goToRecipeForm(null, recipe);
     } catch (err) {
       console.error(err);
@@ -438,7 +438,7 @@ function renderRecipeDetail(tab, id) {
   tab.querySelector('#edit-recipe-btn').addEventListener('click', () => goToRecipeForm(id));
 }
 
-// ── Recipe import pipeline (JSON-LD → LLM fallback) ─────────────────────────
+// ── Recipe import pipeline (JSON-LD structured data only, for now) ─────────
 async function fetchPageHtml(url) {
   const res = await fetch('/api/fetch-page', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
   if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || `Failed to fetch page (${res.status})`); }
@@ -511,29 +511,13 @@ function extractJsonLdRecipe(html, sourceUrl) {
     tags: parseTags(recipeNode),
   };
 }
-function extractVisibleText(html, maxLength = 12000) {
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  doc.querySelectorAll('script, style, noscript, svg, nav, footer, header').forEach(el => el.remove());
-  return (doc.body?.innerText || doc.body?.textContent || '').replace(/\n{3,}/g, '\n\n').trim().slice(0, maxLength);
-}
-async function parseRecipeWithLLM(pageText, sourceUrl) {
-  const res = await fetch('/api/parse-recipe-llm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: pageText, sourceUrl }) });
-  if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || `LLM parse failed (${res.status})`); }
-  const recipe = await res.json();
-  return {
-    title: recipe.title || 'Untitled recipe', sourceUrl,
-    servings: recipe.servings || '',
-    ingredients: Array.isArray(recipe.ingredients) ? recipe.ingredients : [],
-    instructions: Array.isArray(recipe.instructions) ? recipe.instructions : [],
-    tags: Array.isArray(recipe.tags) ? recipe.tags : [],
-  };
-}
 async function importRecipeFromUrl(url) {
   const html = await fetchPageHtml(url);
-  const jsonLd = extractJsonLdRecipe(html, url);
-  if (jsonLd && jsonLd.ingredients.length) return { recipe: jsonLd, method: 'json-ld' };
-  const recipe = await parseRecipeWithLLM(extractVisibleText(html), url);
-  return { recipe, method: 'llm' };
+  const recipe = extractJsonLdRecipe(html, url);
+  if (!recipe || !recipe.ingredients.length) {
+    throw new Error("No structured recipe data found on this page. Try a different site, or add the recipe manually.");
+  }
+  return recipe;
 }
 
 // ── PANTRY ──────────────────────────────────────────────────────────────────

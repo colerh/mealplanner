@@ -755,7 +755,6 @@ function drawWeekView(content) {
     });
     content.querySelector('#gen-shopping').addEventListener('click', () => {
       generateShoppingListFromDates(dates.map(toISODate));
-      showTab('shopping');
     });
   }
 
@@ -862,17 +861,16 @@ function groupQuantityString(group) {
   return parts.filter(Boolean).join(' + ');
 }
 
-function generateShoppingListFromDates(dates) {
-  const groups = mergeIngredientsForDates(dates);
+function finalizeShoppingList(groups, includedKeys) {
   const existing = getShopping();
   const manualItems = existing.filter(i => i.source === 'manual');
   const prevGenerated = new Map(existing.filter(i => i.source === 'recipe').map(i => [normalizeIngredientName(i.ingredientName), i]));
 
   const generated = [];
-  let skippedHave = 0, flaggedLow = 0;
+  let flaggedLow = 0;
   for (const [key, group] of groups.entries()) {
+    if (!includedKeys.has(key)) continue;
     const status = pantryStatus(group.displayName);
-    if (status === 'have') { skippedHave++; continue; }
     if (status === 'low') flaggedLow++;
     const prev = prevGenerated.get(key);
     generated.push({
@@ -884,8 +882,51 @@ function generateShoppingListFromDates(dates) {
       pantryFlag: status === 'low' ? 'low' : (status === 'out' ? 'out' : null),
     });
   }
+  const excluded = groups.size - includedKeys.size;
   setShopping([...manualItems, ...generated]);
-  toast(`Generated ${generated.length} item${generated.length === 1 ? '' : 's'}. ${skippedHave} skipped (in stock), ${flaggedLow} low.`, 'success');
+  toast(`Generated ${generated.length} item${generated.length === 1 ? '' : 's'}. ${excluded} excluded, ${flaggedLow} low.`, 'success');
+  showTab('shopping');
+}
+
+function generateShoppingListFromDates(dates) {
+  const groups = mergeIngredientsForDates(dates);
+  const alwaysIncludeKeys = new Set();
+  const needsReview = [];
+  for (const [key, group] of groups.entries()) {
+    const status = pantryStatus(group.displayName);
+    if (status === 'have' || status === 'low') needsReview.push({ key, group, status });
+    else alwaysIncludeKeys.add(key);
+  }
+
+  if (!needsReview.length) {
+    finalizeShoppingList(groups, alwaysIncludeKeys);
+    return;
+  }
+
+  openModal(`
+    <h3>Review Pantry Items</h3>
+    <p class="text-dim text-small" style="margin-bottom:10px">These are marked as already stocked or running low. Choose which to include in this shopping list — low items are pre-checked, have items aren't.</p>
+    <div class="card">${needsReview.map(entry => `
+      <div class="pantry-row">
+        <input type="checkbox" class="review-checkbox" data-key="${escapeHtml(entry.key)}" ${entry.status === 'low' ? 'checked' : ''} style="width:auto;min-height:auto;flex-shrink:0">
+        <div class="name">${escapeHtml(entry.group.displayName)}</div>
+        <span class="badge ${entry.status === 'low' ? 'badge-amber' : 'badge-green'}">${entry.status}</span>
+      </div>`).join('')}</div>
+    <div class="btn-row mt-8">
+      <button class="btn btn-outline flex-1" data-a="cancel">Cancel</button>
+      <button class="btn btn-primary flex-1" data-a="confirm">Generate List</button>
+    </div>
+  `, {
+    onMount(modal, close) {
+      modal.querySelector('[data-a=cancel]').addEventListener('click', close);
+      modal.querySelector('[data-a=confirm]').addEventListener('click', () => {
+        const included = new Set(alwaysIncludeKeys);
+        modal.querySelectorAll('.review-checkbox:checked').forEach(cb => included.add(cb.dataset.key));
+        finalizeShoppingList(groups, included);
+        close();
+      });
+    },
+  });
 }
 
 function renderShoppingTab() {

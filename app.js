@@ -922,7 +922,7 @@ function generateShoppingListFromDates(dates) {
     <p class="text-dim text-small" style="margin-bottom:10px">These are marked as already stocked or running low. Choose which to include in this shopping list — low items are pre-checked, have items aren't.</p>
     <div class="card">${needsReview.map(entry => `
       <div class="pantry-row">
-        <input type="checkbox" class="review-checkbox" data-key="${escapeHtml(entry.key)}" ${entry.status === 'low' ? 'checked' : ''} style="width:auto;min-height:auto;flex-shrink:0">
+        <input type="checkbox" class="review-checkbox" data-key="${escapeHtml(entry.key)}" ${entry.status === 'low' ? 'checked' : ''}>
         <div class="name">${escapeHtml(entry.group.displayName)}</div>
         <span class="badge ${entry.status === 'low' ? 'badge-amber' : 'badge-green'}">${entry.status}</span>
       </div>`).join('')}</div>

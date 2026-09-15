@@ -14,6 +14,12 @@ function normalizeCode(raw) {
 }
 
 function store() {
+  // Zero-config auto-detection doesn't kick in for every deploy path (e.g.
+  // CLI-triggered deploys outside Netlify's own build pipeline) — fall back
+  // to explicit site/token config, which Netlify Blobs supports natively.
+  const siteID = process.env.BLOBS_SITE_ID;
+  const token = process.env.BLOBS_TOKEN;
+  if (siteID && token) return getStore({ name: 'mealplanner-sync', siteID, token });
   return getStore('mealplanner-sync');
 }
 

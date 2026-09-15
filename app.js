@@ -18,12 +18,13 @@ function svgI(name, size = 16, color = 'currentColor') {
 // preference, not app data.
 const SYNCED_KEYS = new Set(['mealplanner_recipes', 'mealplanner_pantry', 'mealplanner_mealplan', 'mealplanner_shopping', 'mealplanner_settings']);
 let suppressSyncPush = false;
+let syncDirty = false; // true when this device has local edits not yet pushed
 
 const ls = {
   get: k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
   set: (k, v) => {
     localStorage.setItem(k, JSON.stringify(v));
-    if (SYNCED_KEYS.has(k) && !suppressSyncPush) scheduleSyncPush();
+    if (SYNCED_KEYS.has(k) && !suppressSyncPush) { syncDirty = true; scheduleSyncPush(); }
   },
 };
 
@@ -1296,6 +1297,7 @@ function applySyncPayload(data) {
   } finally {
     suppressSyncPush = false;
   }
+  syncDirty = false; // just accepted the remote snapshot as current truth
 }
 
 async function pushSyncData() {
@@ -1304,6 +1306,7 @@ async function pushSyncData() {
   const payload = buildSyncPayload();
   const res = await fetch('/api/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, data: payload }) });
   if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || `Sync push failed (${res.status})`); }
+  syncDirty = false;
   setSyncMeta({ lastSyncedAt: payload.updatedAt, lastError: null });
 }
 
@@ -1451,7 +1454,10 @@ function renderSettingsTab() {
       btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Syncing...';
       try {
         clearTimeout(syncPushTimer);
-        await pushSyncData();
+        // Only push if this device actually has edits the server hasn't seen —
+        // otherwise a no-op push would overwrite genuinely newer data from
+        // another device with a stale copy of what's already on the server.
+        if (syncDirty) await pushSyncData();
         await pullSyncData();
         toast('Synced.', 'success');
       } catch (err) {

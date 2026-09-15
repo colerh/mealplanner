@@ -12,9 +12,19 @@ function svgI(name, size = 16, color = 'currentColor') {
 }
 
 // ── Storage ───────────────────────────────────────────────────────────────────
+// Keys included in cross-device sync (see the SYNC section below). Kroger
+// tokens and the per-device theme are deliberately excluded — tokens because
+// the sync store has no real access control, theme because it's a per-device
+// preference, not app data.
+const SYNCED_KEYS = new Set(['mealplanner_recipes', 'mealplanner_pantry', 'mealplanner_mealplan', 'mealplanner_shopping', 'mealplanner_settings']);
+let suppressSyncPush = false;
+
 const ls = {
   get: k => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
-  set: (k, v) => localStorage.setItem(k, JSON.stringify(v)),
+  set: (k, v) => {
+    localStorage.setItem(k, JSON.stringify(v));
+    if (SYNCED_KEYS.has(k) && !suppressSyncPush) scheduleSyncPush();
+  },
 };
 
 const getRecipes  = () => ls.get('mealplanner_recipes') || [];
@@ -210,7 +220,9 @@ function confirmDialog(message) {
 }
 
 // ── Tabs ────────────────────────────────────────────────────────────────────
+let activeTab = 'plan';
 function showTab(id) {
+  activeTab = id;
   document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
   document.getElementById('tab-' + id)?.classList.add('active');
   document.querySelectorAll('#sidebar .nav-item[data-tab], #bottom-nav .nav-item[data-tab]').forEach(n =>
@@ -222,6 +234,7 @@ function showTab(id) {
   if (id === 'shopping') renderShoppingTab();
   if (id === 'settings') renderSettingsTab();
 }
+function refreshCurrentTab() { showTab(activeTab); }
 function openMenu() { document.getElementById('menu-overlay').classList.add('open'); }
 
 // ── RECIPES ───────────────────────────────────────────────────────────────────
@@ -1252,11 +1265,96 @@ async function openKrogerReview() {
   });
 }
 
+// ── SYNC (loose cross-device account) ───────────────────────────────────────
+// No passwords, no real user identity — a user-chosen "sync code" maps to
+// one JSON blob (via netlify/functions/sync.js + Netlify Blobs) holding
+// recipes/pantry/meal plan/shopping list/settings. Whoever has the code can
+// read or overwrite that blob; that's the accepted tradeoff for skipping
+// real accounts. Kroger tokens are never included in what's synced.
+const getSyncCode = () => ls.get('mealplanner_sync_code') || '';
+const getSyncMeta = () => ls.get('mealplanner_sync_meta') || {};
+function setSyncCode(code) { localStorage.setItem('mealplanner_sync_code', JSON.stringify(code)); }
+function clearSyncCode() { localStorage.removeItem('mealplanner_sync_code'); localStorage.removeItem('mealplanner_sync_meta'); }
+function setSyncMeta(meta) { localStorage.setItem('mealplanner_sync_meta', JSON.stringify({ ...getSyncMeta(), ...meta })); }
+
+function buildSyncPayload() {
+  return {
+    recipes: getRecipes(), pantry: getPantry(), mealPlan: getMealPlan(),
+    shoppingList: getShopping(), settings: getSettings(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function applySyncPayload(data) {
+  suppressSyncPush = true;
+  try {
+    if (data.recipes !== undefined) setRecipes(data.recipes);
+    if (data.pantry !== undefined) setPantry(data.pantry);
+    if (data.mealPlan !== undefined) setMealPlan(data.mealPlan);
+    if (data.shoppingList !== undefined) setShopping(data.shoppingList);
+    if (data.settings !== undefined) setSettings(data.settings);
+  } finally {
+    suppressSyncPush = false;
+  }
+}
+
+async function pushSyncData() {
+  const code = getSyncCode();
+  if (!code) return;
+  const payload = buildSyncPayload();
+  const res = await fetch('/api/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, data: payload }) });
+  if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || `Sync push failed (${res.status})`); }
+  setSyncMeta({ lastSyncedAt: payload.updatedAt, lastError: null });
+}
+
+let syncPushTimer = null;
+function scheduleSyncPush() {
+  if (!getSyncCode()) return;
+  clearTimeout(syncPushTimer);
+  syncPushTimer = setTimeout(() => {
+    pushSyncData().catch(err => { console.warn('sync push failed', err); setSyncMeta({ lastError: err.message }); });
+  }, 1500);
+}
+
+async function pullSyncData() {
+  const code = getSyncCode();
+  if (!code) return { pulled: false };
+  const res = await fetch('/api/sync?code=' + encodeURIComponent(code));
+  if (!res.ok) { const body = await res.json().catch(() => ({})); throw new Error(body.error || `Sync pull failed (${res.status})`); }
+  const { data } = await res.json();
+  if (!data) { await pushSyncData(); return { pulled: false, initialized: true }; }
+  applySyncPayload(data);
+  setSyncMeta({ lastSyncedAt: data.updatedAt, lastError: null });
+  return { pulled: true };
+}
+
+function normalizeSyncCode(raw) {
+  return String(raw || '').trim().toLowerCase().replace(/\s+/g, '-');
+}
+
 // ── SETTINGS ────────────────────────────────────────────────────────────────
+function formatRelativeTime(iso) {
+  if (!iso) return '';
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs} hr ago`;
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 function renderSettingsTab() {
   const content = document.getElementById('settings-content');
   const settings = getSettings();
   const connected = isKrogerConnected();
+  const syncCode = getSyncCode();
+  const syncMeta = getSyncMeta();
+  const syncStatusText = syncMeta.lastError
+    ? `⚠ Last sync failed: ${syncMeta.lastError}`
+    : syncMeta.lastSyncedAt
+      ? `Last synced ${formatRelativeTime(syncMeta.lastSyncedAt)}`
+      : 'Not synced yet.';
 
   content.innerHTML = `
     <div class="card">
@@ -1277,6 +1375,22 @@ function renderSettingsTab() {
       <div id="location-results"></div>
       <div id="current-location" class="text-small mt-8">${settings.krogerLocationLabel ? `Selected store: <strong>${escapeHtml(settings.krogerLocationLabel)}</strong>` : '<span class="text-dim">No store selected.</span>'}</div>
       <p class="text-dim text-small mt-8">This store is only used to look up products/prices. Kroger actually adds cart items to whichever store is currently active on your Kroger account — make sure that matches, in the Kroger app or kroger.com, or items may not show up after "Send to Kroger Cart."</p>
+    </div>
+
+    <div class="card">
+      <h2>Sync Across Devices</h2>
+      <p class="text-dim text-small" style="margin-bottom:10px">Enter the same code on another device (phone, laptop) to share your recipes, pantry, plan, and shopping list. This isn't a password — anyone with the code can read or overwrite that data, so it's meant for your own devices only, not real account security.</p>
+      ${syncCode ? `
+        <div class="kroger-status connected">● Syncing as "<strong>${escapeHtml(syncCode)}</strong>"</div>
+        <div id="sync-status" class="text-dim text-small mt-8">${escapeHtml(syncStatusText)}</div>
+        <div class="btn-row mt-8">
+          <button class="btn btn-outline btn-sm" id="sync-now-btn">Sync Now</button>
+          <button class="btn btn-danger btn-sm" id="sync-stop-btn">Stop Syncing</button>
+        </div>
+      ` : `
+        <div class="field"><label>Sync Code</label><input type="text" id="sync-code-input" placeholder="e.g. my-kitchen-2026"></div>
+        <button class="btn btn-primary btn-sm" id="sync-start-btn">Start Syncing</button>
+      `}
     </div>
 
     <div class="card">
@@ -1331,6 +1445,46 @@ function renderSettingsTab() {
     } catch (err) { resultsEl.innerHTML = `<p class="text-small mt-8" style="color:var(--red)">${escapeHtml(err.message || 'Search failed.')}</p>`; }
   });
 
+  if (syncCode) {
+    content.querySelector('#sync-now-btn').addEventListener('click', async () => {
+      const btn = content.querySelector('#sync-now-btn');
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Syncing...';
+      try {
+        clearTimeout(syncPushTimer);
+        await pushSyncData();
+        await pullSyncData();
+        toast('Synced.', 'success');
+      } catch (err) {
+        toast(err.message || 'Sync failed.', 'error');
+      }
+      renderSettingsTab();
+      refreshCurrentTab();
+    });
+    content.querySelector('#sync-stop-btn').addEventListener('click', async () => {
+      if (await confirmDialog('Stop syncing on this device? Your data stays as-is locally, but changes here won\'t be sent anywhere, and you won\'t receive updates from your other devices.')) {
+        clearSyncCode();
+        renderSettingsTab();
+      }
+    });
+  } else {
+    content.querySelector('#sync-start-btn').addEventListener('click', async () => {
+      const raw = content.querySelector('#sync-code-input').value;
+      const code = normalizeSyncCode(raw);
+      if (!/^[a-z0-9_-]{4,64}$/.test(code)) { toast('Use 4-64 letters, numbers, dashes, or underscores.', 'error'); return; }
+      const btn = content.querySelector('#sync-start-btn');
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Connecting...';
+      setSyncCode(code);
+      try {
+        const result = await pullSyncData();
+        toast(result.initialized ? 'Sync started — this device is now the source.' : 'Synced from your other device.', 'success');
+      } catch (err) {
+        toast(err.message || 'Could not reach sync. You can retry with Sync Now.', 'error');
+      }
+      renderSettingsTab();
+      refreshCurrentTab();
+    });
+  }
+
   content.querySelector('#export-btn').addEventListener('click', () => {
     const data = { recipes: getRecipes(), pantry: getPantry(), mealPlan: getMealPlan(), shoppingList: getShopping(), settings: getSettings(), exportedAt: new Date().toISOString() };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -1357,8 +1511,8 @@ function renderSettingsTab() {
   });
 
   content.querySelector('#wipe-btn').addEventListener('click', async () => {
-    if (await confirmDialog('Erase ALL local data (recipes, pantry, plan, shopping list, Kroger connection)? This cannot be undone.')) {
-      ['mealplanner_recipes', 'mealplanner_pantry', 'mealplanner_mealplan', 'mealplanner_shopping', 'mealplanner_settings', 'mealplanner_kroger_tokens', 'mealplanner_kroger_app_token']
+    if (await confirmDialog('Erase ALL local data (recipes, pantry, plan, shopping list, Kroger connection)? This also stops syncing on this device, so an erase actually sticks. This cannot be undone.')) {
+      ['mealplanner_recipes', 'mealplanner_pantry', 'mealplanner_mealplan', 'mealplanner_shopping', 'mealplanner_settings', 'mealplanner_kroger_tokens', 'mealplanner_kroger_app_token', 'mealplanner_sync_code', 'mealplanner_sync_meta']
         .forEach(k => localStorage.removeItem(k));
       toast('All data erased.');
       renderSettingsTab();
@@ -1410,6 +1564,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   await checkKrogerOAuthRedirect();
   showTab('plan');
+
+  if (getSyncCode()) {
+    pullSyncData().then(result => { if (result.pulled) refreshCurrentTab(); })
+      .catch(err => { console.warn('initial sync pull failed', err); setSyncMeta({ lastError: err.message }); });
+  }
 
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(err => console.warn('sw register failed', err)));

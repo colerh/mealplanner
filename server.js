@@ -31,11 +31,16 @@ const fetchPage       = require('./netlify/functions/fetch-page');
 const krogerConfig    = require('./netlify/functions/kroger-config');
 const krogerToken     = require('./netlify/functions/kroger-token');
 const krogerProxy     = require('./netlify/functions/kroger-proxy');
+const sync            = require('./netlify/functions/sync');
 
 app.post('/api/fetch-page',       wrap(fetchPage.handler));
 app.get('/api/kroger-config',     wrap(krogerConfig.handler));
 app.post('/api/kroger-token',     wrap(krogerToken.handler));
 app.post('/api/kroger-proxy',     wrap(krogerProxy.handler));
+// Sync needs real Netlify Blobs context — works under `netlify dev` or a
+// live deploy, not the plain node server (see sync.js's error message).
+app.get('/api/sync',              wrap(sync.handler));
+app.post('/api/sync',             wrap(sync.handler));
 
 const port = process.env.PORT || 3000;
 app.listen(port, '127.0.0.1', () => console.log(`MealPlanner → http://localhost:${port}`));
